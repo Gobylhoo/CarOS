@@ -469,7 +469,7 @@ function setFamilyKey(k) { _familyKey = (k || "").trim(); }
    injected automatically; the family key is sent when present). In
    production, ENV.API_ENDPOINT points to /api/claude — a proxy that
    uses the family's key from the x-family-key header. */
-async function callClaude(messages, system) {
+async function callClaude(messages, system, maxTokens = 1500) {
   const endpoint = ENV.API_ENDPOINT || "https://api.anthropic.com/v1/messages";
   const usingProxy = !!ENV.API_ENDPOINT;
   // Headers: in the artifact runtime (no key, no proxy) send ONLY Content-Type —
@@ -493,7 +493,7 @@ async function callClaude(messages, system) {
   const res = await fetch(endpoint, {
     method: "POST",
     headers,
-    body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 1000, messages: msgs }),
+    body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: maxTokens, messages: msgs }),
   });
   const data = await res.json();
   if (data?.error) throw new Error(data.error.message || "API error");
@@ -1328,7 +1328,8 @@ function Member({ go, id }) {
         `${Object.entries(m.quiz.dims).map(([k, v]) => `${k} ${v}`).join(", ")} — ` +
         `their top dimensions are ${topDims(m.quiz.dims).join(", ")}; let these shape your suggestions. ` +
         (m.quiz.customs?.length ? `They also wrote free-form answers worth weighting: ${m.quiz.customs.join("; ")}. ` : "") : "") +
-      `Be concise, knowledgeable about cars, and helpful. When the user reveals a new ` +
+      `Be concise, knowledgeable about cars, and helpful. Keep replies under 120 words ` +
+      `so they never get cut off. When the user reveals a new ` +
       `preference, constraint, or life event (budget change, lease ending, new ticket, ` +
       `EV interest, etc.), acknowledge it naturally. ` +
       `PERSONALITY — two rules that define you: ` +
@@ -1350,20 +1351,23 @@ function Member({ go, id }) {
 
     try {
       const history = [...m.chat, userMsg].map((c) => ({ role: c.role, content: c.content }));
-      const raw = await callClaude(history, system);
+      const raw = await callClaude(history, system, 1200);
       let visible = raw, patch = {};
       const idx = raw.indexOf("<<UPDATE>>");
       if (idx !== -1) {
         visible = raw.slice(0, idx).trim();
         try { patch = JSON.parse(raw.slice(idx + 10).trim()); } catch {}
       }
+      // Guard: if the marker got truncated away or parsing left nothing,
+      // still show whatever text arrived rather than a blank bubble.
+      if (!visible) visible = raw.trim() || "(no response — try again)";
       appendChat(id, { role: "assistant", content: visible });
       if (patch && Object.keys(patch).length) {
         if (patch.matched) patch.matched = [...(m.matched || []), ...patch.matched];
         updateMember(id, patch);
       }
     } catch (e) {
-      appendChat(id, { role: "assistant", content: "Connection hiccup — try again." });
+      appendChat(id, { role: "assistant", content: "Connection hiccup — " + (e.message || "try again") });
     }
     setBusy(false);
   };
