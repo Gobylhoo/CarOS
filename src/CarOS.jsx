@@ -127,7 +127,7 @@ const SEED = {
    The app sends the active family code via a request header
    (x-family-code) so policies can restrict rows to that family.
    ============================================================ */
-const USE_SUPABASE = true; // ← flip to true in your repo once env + tables are set
+const USE_SUPABASE = true; // Supabase in production. Set false only for local no-DB testing.
 
 /* Env bridge: the artifact runtime can't parse import.meta, so this file
    reads keys from globalThis.CAROS_ENV instead. In the Vite project,
@@ -1209,7 +1209,8 @@ function AddCarModal({ members, onAdd, onClose }) {
           options={["", ...members.map((m) => m.name).filter(Boolean)]} prefix="driver: " />
         <Select value={c.status} onChange={(v) => set({ status: v })}
           options={["owned", "leased", "considering"]} />
-        <input type="number" value={c.mileage} onChange={(e) => set({ mileage: +e.target.value })}
+        <input type="number" value={c.mileage || ""} onChange={(e) => set({ mileage: +e.target.value })}
+          onFocus={(e) => e.target.select()}
           placeholder="Miles" style={{ ...inputStyle, width: 90 }} />
       </div>
       <input value={c.condition} onChange={(e) => set({ condition: e.target.value })}
@@ -1783,8 +1784,9 @@ function Budget() {
                       textTransform: "capitalize", fontFamily: T.mono }}>{k}</div>
                     <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
                       <span style={{ color: T.dim, fontSize: 13 }}>$</span>
-                      <input type="number" value={(m.costs?.[k]) ?? ""}
+                      <input type="number" value={(m.costs?.[k]) || ""}
                         onChange={(e) => setCost(m.id, k, e.target.value)}
+                        onFocus={(e) => e.target.select()}
                         placeholder="0"
                         style={{ ...inputStyle, padding: "7px 8px", width: "100%" }} />
                     </div>
@@ -1795,8 +1797,9 @@ function Budget() {
                 borderTop: `1px solid ${T.line}`, paddingTop: 10 }}>
                 <span style={{ fontSize: 12.5, color: T.dim }}>Wants to spend next:</span>
                 <span style={{ color: T.dim, fontSize: 13 }}>$</span>
-                <input type="number" value={m.wantMonthly ?? ""}
+                <input type="number" value={m.wantMonthly || ""}
                   onChange={(e) => updateMember(m.id, { wantMonthly: Number(e.target.value) || 0 })}
+                  onFocus={(e) => e.target.select()}
                   placeholder="0"
                   style={{ ...inputStyle, padding: "7px 8px", width: 90 }} />
                 <span style={{ fontSize: 12.5, color: T.dim }}>/mo</span>
