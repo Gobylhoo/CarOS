@@ -127,7 +127,7 @@ const SEED = {
    The app sends the active family code via a request header
    (x-family-code) so policies can restrict rows to that family.
    ============================================================ */
-const USE_SUPABASE = true; // ← flip to true in your repo once env + tables are set
+const USE_SUPABASE = false; // ← flip to true in your repo once env + tables are set
 
 /* Env bridge: the artifact runtime can't parse import.meta, so this file
    reads keys from globalThis.CAROS_ENV instead. In the Vite project,
@@ -159,6 +159,7 @@ const toRowMember = (m, code) => ({
   lease_vs_buy: m.leaseVsBuy, insurance_tier: m.insuranceTier,
   priorities: m.priorities, preferences: m.preferences,
   personal_budget_monthly: m.personalBudgetMonthly, matched: m.matched, chat: m.chat,
+  costs: m.costs || {}, want_monthly: m.wantMonthly ?? null, quiz: m.quiz || null,
 });
 const fromRowMember = (r) => ({
   id: r.id, name: r.name, age: r.age, role: r.role, canDrive: r.can_drive,
@@ -166,6 +167,7 @@ const fromRowMember = (r) => ({
   insuranceTier: r.insurance_tier, priorities: r.priorities || [],
   preferences: r.preferences || "", personalBudgetMonthly: r.personal_budget_monthly,
   matched: r.matched || [], chat: r.chat || [],
+  costs: r.costs || {}, wantMonthly: r.want_monthly ?? 0, quiz: r.quiz || null,
 });
 
 /* --- localStorage backend (works today, single device) --- */
@@ -284,6 +286,18 @@ function genCode() {
   return Array.from({ length: 6 }, () =>
     chars[Math.floor(Math.random() * chars.length)]).join("");
 }
+/* ---------- budget helpers ---------- */
+// Monthly running cost for a member: their explicit costs, defaulting sensibly.
+function memberMonthly(m) {
+  const c = m.costs || {};
+  return (c.payment || 0) + (c.insurance || 0) + (c.fuel || 0) + (c.upkeep || 0);
+}
+function familyTotals(members) {
+  const spend = members.reduce((s, m) => s + memberMonthly(m), 0);
+  const want = members.reduce((s, m) => s + (m.wantMonthly || 0), 0);
+  return { spend, want };
+}
+
 const uid = () => Math.random().toString(36).slice(2, 10);
 
 /* ============================================================
@@ -295,66 +309,140 @@ const uid = () => Math.random().toString(36).slice(2, 10);
 const DIMS = ["performance", "comfort", "efficiency", "reliability",
   "character", "practicality", "image", "value"];
 
+/* 22 questions in 4 sections. Each option weights DIMS; every question also
+   accepts a custom free-text answer (scored as a note, not numerically). */
 const QUIZ = [
-  { q: "First thing you notice about a car?", options: [
-    { t: "How it looks", w: { image: 2, character: 1 } },
-    { t: "How it sounds", w: { character: 2, performance: 1 } },
-    { t: "What it costs to own", w: { value: 3 } },
-    { t: "How well it's built", w: { reliability: 2, comfort: 1 } },
+  // --- LIFESTYLE ---
+  { sec: "Lifestyle", q: "Saturday, no plans, full tank. The car:", options: [
+    { t: "Stays parked, I'm being lazy", w: { value: 2, practicality: 1 } },
+    { t: "Errand duty, obviously", w: { practicality: 2, efficiency: 1 } },
+    { t: "I go find a good road", w: { performance: 2, character: 2 } },
+    { t: "Point it somewhere far and just drive", w: { comfort: 2, character: 1 } },
   ]},
-  { q: "Pick one, forever:", options: [
-    { t: "Faster", w: { performance: 3 } },
-    { t: "Fancier", w: { comfort: 2, image: 1 } },
-    { t: "Cheaper to run", w: { efficiency: 2, value: 2 } },
-    { t: "Never breaks", w: { reliability: 3 } },
+  { sec: "Lifestyle", q: "Your daily drive is basically:", options: [
+    { t: "Bumper-to-bumper purgatory", w: { comfort: 2, efficiency: 1 } },
+    { t: "Wide-open highway", w: { comfort: 2, performance: 1 } },
+    { t: "A few stoplights and I'm home", w: { efficiency: 1, practicality: 1 } },
+    { t: "What drive, I barely leave the house", w: { value: 2 } },
   ]},
-  { q: "A surprise $1,500 repair bill is…", options: [
-    { t: "A catastrophe", w: { value: 3, reliability: 1 } },
-    { t: "Annoying but fine", w: { value: 1 } },
-    { t: "The cost of driving something great", w: { character: 3 } },
-    { t: "Why I buy new with a warranty", w: { reliability: 2, comfort: 1 } },
+  { sec: "Lifestyle", q: "Who's riding with you this week:", options: [
+    { t: "Nobody, it's my time", w: { performance: 1, character: 1 } },
+    { t: "One regular co-pilot", w: { comfort: 1 } },
+    { t: "The whole circus", w: { practicality: 3, comfort: 1 } },
+    { t: "More dogs and gear than humans", w: { practicality: 3 } },
   ]},
-  { q: "Saturday morning, nowhere to be. Your car:", options: [
-    { t: "Stays parked", w: { practicality: 2, value: 1 } },
-    { t: "Runs errands — it's a tool", w: { practicality: 2, efficiency: 1 } },
-    { t: "Finds a good road", w: { performance: 2, character: 2 } },
-    { t: "Road trip, no destination", w: { comfort: 2, character: 1 } },
+  { sec: "Lifestyle", q: "Three hours behind the wheel:", options: [
+    { t: "My back files a formal complaint", w: { comfort: 3 } },
+    { t: "Fine if the seat's good", w: { comfort: 2 } },
+    { t: "Bring it on if the road's fun", w: { performance: 2, character: 1 } },
+    { t: "Genuinely my happy place", w: { character: 2, comfort: 1 } },
   ]},
-  { q: "The right amount of attention from strangers:", options: [
-    { t: "None — invisible is good", w: { practicality: 2, value: 1 } },
-    { t: "A nod from people who know", w: { character: 3 } },
-    { t: "Heads should turn", w: { image: 3 } },
-    { t: "Couldn't care less", w: { reliability: 1, value: 1 } },
+  { sec: "Lifestyle", q: "What's the climate where you drive? (snow, heat, rain, mild, all of it)",
+    custom: true, options: [] },
+  { sec: "Lifestyle", q: "How far off the map do you get:", options: [
+    { t: "Never far from a coffee shop", w: { comfort: 1, value: 1 } },
+    { t: "The odd back road", w: { character: 1 } },
+    { t: "Trailheads and gravel", w: { practicality: 2 } },
+    { t: "Where the pavement ends", w: { practicality: 3 } },
   ]},
-  { q: "Your ideal soundtrack:", options: [
-    { t: "Silence — electric instant", w: { efficiency: 2, comfort: 1 } },
-    { t: "A quiet, expensive hum", w: { comfort: 3 } },
-    { t: "A proper engine note", w: { performance: 2, character: 2 } },
-    { t: "Whatever the speakers play", w: { practicality: 1, comfort: 1 } },
+  // --- MONEY ---
+  { sec: "Money", q: "Surprise $1,500 repair bill. You:", options: [
+    { t: "Spiral", w: { value: 3, reliability: 1 } },
+    { t: "Grumble and pay it", w: { value: 1 } },
+    { t: "Shrug, it's the cost of something great", w: { character: 3 } },
+    { t: "This is why I bought new with a warranty", w: { reliability: 2, comfort: 1 } },
   ]},
-  { q: "You keep a car for:", options: [
-    { t: "Until the wheels fall off", w: { reliability: 2, value: 2 } },
-    { t: "3–4 years, then something new", w: { image: 2, comfort: 1 } },
-    { t: "As long as it excites me", w: { character: 2, performance: 1 } },
-    { t: "Depends entirely on the deal", w: { value: 3 } },
+  { sec: "Money", q: "Pick one, forever:", options: [
+    { t: "Cheap to buy", w: { value: 3 } },
+    { t: "Cheap to run", w: { efficiency: 3 } },
+    { t: "Holds its value", w: { value: 2, reliability: 1 } },
+    { t: "Who cares, I'm in love", w: { character: 3 } },
   ]},
-  { q: "Cargo reality check:", options: [
-    { t: "Just me and a bag", w: { performance: 1, character: 1 } },
-    { t: "Passengers most days", w: { practicality: 3, comfort: 1 } },
-    { t: "Gear, dogs, projects", w: { practicality: 3 } },
-    { t: "Occasionally everything at once", w: { practicality: 2, value: 1 } },
+  { sec: "Money", q: "Depreciation is:", options: [
+    { t: "Money set on fire", w: { value: 3 } },
+    { t: "A fact of life", w: { value: 1 } },
+    { t: "Worth it for the right car", w: { character: 2 } },
+    { t: "Not something I track", w: { image: 1, character: 1 } },
   ]},
-  { q: "Traffic is terrible today. You feel:", options: [
-    { t: "Fine — the seats are great", w: { comfort: 3 } },
-    { t: "Fine — barely burning anything", w: { efficiency: 3 } },
-    { t: "Robbed of a good drive", w: { performance: 2, character: 1 } },
-    { t: "Glad the car drives itself half the time", w: { comfort: 1, efficiency: 1, image: 1 } },
+  { sec: "Money", q: "How long do you keep a car:", options: [
+    { t: "Till the wheels fall off", w: { reliability: 2, value: 2 } },
+    { t: "A solid 8–10 years", w: { reliability: 2, value: 1 } },
+    { t: "3–4 then something new", w: { image: 2, comfort: 1 } },
+    { t: "Exactly as long as the deal makes sense", w: { value: 3 } },
   ]},
-  { q: "Money's no object tonight. You take home:", options: [
+  { sec: "Money", q: "Monthly payment philosophy:", options: [
+    { t: "Pay cash and own it", w: { value: 2, reliability: 1 } },
+    { t: "Low monthly keeps me happy", w: { value: 2 } },
+    { t: "Lease it and swap often", w: { image: 2, comfort: 1 } },
+    { t: "Whatever's cheapest in the end", w: { value: 3 } },
+  ]},
+  // --- TASTE ---
+  { sec: "Taste", q: "First thing you notice on a car:", options: [
+    { t: "The way it looks", w: { image: 2, character: 1 } },
+    { t: "The way it sounds", w: { character: 2, performance: 1 } },
+    { t: "The price tag", w: { value: 3 } },
+    { t: "How solid it feels", w: { reliability: 2, comfort: 1 } },
+  ]},
+  { sec: "Taste", q: "Money's no object tonight, you drive home:", options: [
     { t: "Something electric and instant", w: { efficiency: 2, performance: 1, image: 1 } },
     { t: "Something German and surgical", w: { performance: 2, comfort: 2 } },
     { t: "Something Italian and loud", w: { character: 3, image: 1 } },
-    { t: "Something that runs for 20 years", w: { reliability: 3, value: 1 } },
+    { t: "Something that'll run for 20 years", w: { reliability: 3, value: 1 } },
+  ]},
+  { sec: "Taste", q: "The right amount of stranger attention:", options: [
+    { t: "None, keep me invisible", w: { practicality: 2, value: 1 } },
+    { t: "A knowing nod from people who get it", w: { character: 3 } },
+    { t: "Heads should turn", w: { image: 3 } },
+    { t: "I genuinely don't notice", w: { reliability: 1, value: 1 } },
+  ]},
+  { sec: "Taste", q: "Your ideal soundtrack:", options: [
+    { t: "Silent EV whoosh", w: { efficiency: 2, comfort: 1 } },
+    { t: "A quiet, expensive hum", w: { comfort: 3 } },
+    { t: "A proper engine note", w: { performance: 2, character: 2 } },
+    { t: "Whatever's on the radio", w: { practicality: 1 } },
+  ]},
+  { sec: "Taste", q: "You'd rather have:", options: [
+    { t: "One car that thrills you", w: { character: 2, performance: 1 } },
+    { t: "Two that just work", w: { practicality: 2, value: 1 } },
+    { t: "The newest tech on the road", w: { image: 2, comfort: 1 } },
+    { t: "The safest thing out there", w: { reliability: 2, comfort: 1 } },
+  ]},
+  { sec: "Taste", q: "Badge on the hood:", options: [
+    { t: "Means nothing to me", w: { value: 2, reliability: 1 } },
+    { t: "Nice if the car earns it", w: { character: 1 } },
+    { t: "Yeah, it matters", w: { image: 3 } },
+    { t: "I'd rather it be a sleeper", w: { performance: 2, character: 1 } },
+  ]},
+  // --- PRACTICAL ---
+  { sec: "Practical", q: "Cargo reality check:", options: [
+    { t: "A backpack and vibes", w: { performance: 1, character: 1 } },
+    { t: "Groceries and passengers", w: { practicality: 2, comfort: 1 } },
+    { t: "Gear, dogs, projects", w: { practicality: 3 } },
+    { t: "Occasionally everything at once", w: { practicality: 2, value: 1 } },
+  ]},
+  { sec: "Practical", q: "Reliability vs. excitement:", options: [
+    { t: "Never leave me stranded", w: { reliability: 3 } },
+    { t: "Mostly dependable is fine", w: { reliability: 2 } },
+    { t: "Worth some risk", w: { character: 2, performance: 1 } },
+    { t: "Give me the thrill, I'll deal", w: { performance: 3, character: 1 } },
+  ]},
+  { sec: "Practical", q: "Tech you actually want:", options: [
+    { t: "Just CarPlay and go", w: { practicality: 1, value: 1 } },
+    { t: "Solid safety aids", w: { reliability: 1, comfort: 1 } },
+    { t: "Full self-driving please", w: { image: 2, comfort: 1, efficiency: 1 } },
+    { t: "Keep it simple, almost analog", w: { character: 2, performance: 1 } },
+  ]},
+  { sec: "Practical", q: "Fast vs. efficient, when you must choose:", options: [
+    { t: "Save the fuel", w: { efficiency: 3 } },
+    { t: "A healthy balance", w: { efficiency: 1, performance: 1 } },
+    { t: "Lean toward quick", w: { performance: 2 } },
+    { t: "Fast, every time", w: { performance: 3 } },
+  ]},
+  { sec: "Practical", q: "In five years, this car should:", options: [
+    { t: "Still run flawlessly", w: { reliability: 3 } },
+    { t: "Have given me great memories", w: { character: 3 } },
+    { t: "Hold its resale value", w: { value: 3 } },
+    { t: "Already be long gone", w: { image: 2 } },
   ]},
 ];
 
@@ -1173,7 +1261,10 @@ function Member({ go, id }) {
 
   const finishQuiz = (answers) => {
     const dims = scoreQuiz(answers);
-    updateMember(id, { quiz: { answers, dims, at: new Date().toISOString() } });
+    const customs = Object.entries(answers)
+      .filter(([, v]) => v && typeof v === "object" && v.custom)
+      .map(([i, v]) => `Q${+i + 1} "${QUIZ[i].q}" → ${v.custom}`);
+    updateMember(id, { quiz: { answers, dims, customs, at: new Date().toISOString() } });
     setQuizOpen(false);
     // Auto-run the matcher with fresh DNA
     setTimeout(() => getMatchesWith(dims), 50);
@@ -1205,6 +1296,8 @@ function Member({ go, id }) {
       (dims ? `Driver DNA from their quiz (0-100 per dimension, higher = matters more): ` +
         `${Object.entries(dims).map(([k, v]) => `${k} ${v}`).join(", ")}. ` +
         `Weight the top dimensions heavily. ` : "") +
+      (m.quiz?.customs?.length ? `Their own words on the quiz — weight these heavily: ` +
+        `${m.quiz.customs.join("; ")}. ` : "") +
       `Recent conversation excerpts: ${m.chat.slice(-6).map((c) => c.content).join(" | ") || "none"}`;
     try {
       const raw = await callClaude([{ role: "user", content: profile }], sysMatch);
@@ -1232,7 +1325,8 @@ function Member({ go, id }) {
       `budget $${m.personalBudgetMonthly}/mo, notes: "${m.preferences}". ` +
       (m.quiz ? `Their Driver DNA quiz results (0-100, higher = matters more): ` +
         `${Object.entries(m.quiz.dims).map(([k, v]) => `${k} ${v}`).join(", ")} — ` +
-        `their top dimensions are ${topDims(m.quiz.dims).join(", ")}; let these shape your suggestions. ` : "") +
+        `their top dimensions are ${topDims(m.quiz.dims).join(", ")}; let these shape your suggestions. ` +
+        (m.quiz.customs?.length ? `They also wrote free-form answers worth weighting: ${m.quiz.customs.join("; ")}. ` : "") : "") +
       `Be concise, knowledgeable about cars, and helpful. When the user reveals a new ` +
       `preference, constraint, or life event (budget change, lease ending, new ticket, ` +
       `EV interest, etc.), acknowledge it naturally. ` +
@@ -1408,13 +1502,25 @@ function Member({ go, id }) {
 function QuizFlow({ name, initial, onClose, onFinish }) {
   const [step, setStep] = useState(0);
   const [answers, setAnswers] = useState(initial || {});
+  const [customOpen, setCustomOpen] = useState(false);
+  const [customText, setCustomText] = useState("");
   const q = QUIZ[step];
-  const pick = (i) => {
-    const next = { ...answers, [step]: i };
+  const advance = (next) => {
     setAnswers(next);
+    setCustomOpen(false); setCustomText("");
     if (step < QUIZ.length - 1) setTimeout(() => setStep(step + 1), 160);
     else onFinish(next);
   };
+  const pick = (i) => advance({ ...answers, [step]: i });
+  const submitCustom = () => {
+    if (!customText.trim()) return;
+    // store as {custom: text} — scoreQuiz skips non-index answers, and the
+    // matcher/chat receive it as a note, so it still shapes recommendations.
+    advance({ ...answers, [step]: { custom: customText.trim() } });
+  };
+  const curr = answers[step];
+  const isCustom = curr && typeof curr === "object";
+  const customOnly = !q.options || q.options.length === 0;
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(6,8,10,.93)",
       zIndex: 60, display: "flex", alignItems: "center", justifyContent: "center",
@@ -1423,12 +1529,12 @@ function QuizFlow({ name, initial, onClose, onFinish }) {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
           marginBottom: 18 }}>
           <span style={{ fontFamily: T.mono, fontSize: 12, color: T.dim, letterSpacing: 1 }}>
-            DRIVER DNA · {name.toUpperCase()} · {step + 1}/{QUIZ.length}</span>
+            {(q.sec || "DRIVER DNA").toUpperCase()} · {name.toUpperCase()} · {step + 1}/{QUIZ.length}</span>
           <button onClick={onClose} style={{ all: "unset", cursor: "pointer",
             color: T.dim, fontSize: 15, padding: 4 }}>✕</button>
         </div>
         {/* progress: tach ticks fill as you go */}
-        <div style={{ display: "flex", gap: 4, marginBottom: 26 }}>
+        <div style={{ display: "flex", gap: 3, marginBottom: 26 }}>
           {QUIZ.map((_, i) => (
             <div key={i} style={{ flex: 1, height: 4, borderRadius: 2,
               background: i < step ? T.amber : i === step ? T.redline : T.line,
@@ -1438,15 +1544,45 @@ function QuizFlow({ name, initial, onClose, onFinish }) {
         <h3 style={{ fontFamily: T.display, fontSize: 27, fontWeight: 400,
           margin: "0 0 22px", lineHeight: 1.25 }}>{q.q}</h3>
         <div style={{ display: "grid", gap: 10 }}>
-          {q.options.map((o, i) => (
+          {(q.options || []).map((o, i) => (
             <button key={i} onClick={() => pick(i)} style={{ all: "unset", cursor: "pointer",
-              background: answers[step] === i ? "rgba(232,64,42,.14)" : T.panel,
-              border: `1px solid ${answers[step] === i ? T.redline : T.line}`,
+              background: curr === i ? "rgba(232,64,42,.14)" : T.panel,
+              border: `1px solid ${curr === i ? T.redline : T.line}`,
               borderRadius: 11, padding: "15px 17px", fontSize: 15, lineHeight: 1.4,
               transition: "border .15s, background .15s" }}>
               {o.t}
             </button>
           ))}
+          {/* custom answer — always available; the only input on custom-only questions */}
+          {customOnly || customOpen ? (
+            <div style={{ border: `1px solid ${T.redline}`, borderRadius: 11, padding: 12 }}>
+              <textarea autoFocus
+                value={customText || (isCustom ? curr.custom : "")}
+                onChange={(e) => setCustomText(e.target.value)}
+                placeholder={customOnly ? "Type your answer…" : "In your own words…"} rows={2}
+                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitCustom(); } }}
+                style={{ width: "100%", boxSizing: "border-box", background: T.panel2,
+                  border: `1px solid ${T.line}`, color: T.text, borderRadius: 8, padding: "10px 12px",
+                  fontSize: 14.5, fontFamily: "inherit", resize: "vertical" }} />
+              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                <button onClick={submitCustom} style={{ ...primaryBtn, padding: "9px 16px" }}>
+                  {step < QUIZ.length - 1 ? "Next →" : "Finish"}</button>
+                {!customOnly && (
+                  <button onClick={() => { setCustomOpen(false); setCustomText(""); }}
+                    style={{ all: "unset", cursor: "pointer", color: T.dim, fontSize: 13.5,
+                      padding: "9px 6px" }}>Cancel</button>
+                )}
+              </div>
+            </div>
+          ) : (
+            <button onClick={() => setCustomOpen(true)} style={{ all: "unset", cursor: "pointer",
+              background: isCustom ? "rgba(232,64,42,.14)" : "transparent",
+              border: `1px dashed ${isCustom ? T.redline : T.line}`,
+              borderRadius: 11, padding: "15px 17px", fontSize: 15, color: isCustom ? T.text : T.dim,
+              lineHeight: 1.4 }}>
+              {isCustom ? `“${curr.custom}” — edit` : "Something else…"}
+            </button>
+          )}
         </div>
         {step > 0 && (
           <button onClick={() => setStep(step - 1)} style={{ all: "unset", cursor: "pointer",
@@ -1489,6 +1625,8 @@ function Plan() {
         insuranceTier: m.insuranceTier, budget: m.personalBudgetMonthly,
         notes: m.preferences, matched: m.matched,
         driverDNA: m.quiz?.dims || null,
+        monthlyRunningCost: memberMonthly(m),
+        wantsToSpend: m.wantMonthly || null,
       })),
       cars: family.cars,
     };
@@ -1544,83 +1682,155 @@ function Plan() {
    PAGE: BUDGET (full financing math)
    ============================================================ */
 function Budget() {
-  const { family, setCombinedBudget } = useApp();
-  const [price, setPrice] = useState(45000);
-  const [down, setDown] = useState(4000);
-  const [apr, setApr] = useState(7.5);
-  const [term, setTerm] = useState(60);
-  const [insurance, setInsurance] = useState(220);
-  const [fuel, setFuel] = useState(60);
-  const [maint, setMaint] = useState(50);
+  const { family, updateMember } = useApp();
+  const [busy, setBusy] = useState(false);
+  const [aiNote, setAiNote] = useState("");
+  const [err, setErr] = useState("");
 
-  const principal = Math.max(price - down, 0);
-  const r = apr / 100 / 12;
-  const loan = r === 0 ? principal / term
-    : (principal * r) / (1 - Math.pow(1 + r, -term));
-  const total = loan + insurance + fuel + maint;
+  const carFor = (name) => family.cars.find((c) => c.driver === name);
+  const { spend, want } = familyTotals(family.members);
+  const budget = family.combinedBudgetMonthly || 0;
 
-  const personalSum = family.members.reduce((s, m) => s + m.personalBudgetMonthly, 0);
+  const setCost = (id, key, val) => {
+    const m = family.members.find((x) => x.id === id);
+    updateMember(id, { costs: { ...(m.costs || {}), [key]: Number(val) || 0 } });
+  };
 
-  const Field = ({ label, value, set, suffix, step = 1 }) => (
-    <div style={{ marginBottom: 14 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
-        <span style={{ fontSize: 13.5, color: T.dim }}>{label}</span>
-        <span style={{ fontFamily: T.mono, fontSize: 13.5, color: T.text }}>
-          {suffix === "$" ? "$" : ""}{value.toLocaleString()}{suffix && suffix !== "$" ? suffix : ""}
-        </span>
-      </div>
-      <input type="range" min={0}
-        max={label.includes("APR") ? 15 : label.includes("Term") ? 84 : label.includes("Price") ? 120000 : label.includes("Down") ? 30000 : 600}
-        step={step} value={value} onChange={(e) => set(Number(e.target.value))}
-        style={{ width: "100%", accentColor: T.redline }} />
-    </div>
-  );
+  // AI fills any blank cost fields (and can adjust want-to-spend) from car + profile.
+  const aiEstimate = async () => {
+    setBusy(true); setErr(""); setAiNote("");
+    const payload = family.members.map((m) => ({
+      id: m.id, name: m.name, age: m.age, insuranceTier: m.insuranceTier,
+      commuteMilesWeek: m.commuteMilesWeek, leaseVsBuy: m.leaseVsBuy,
+      car: carFor(m.name) ? `${carFor(m.name).year} ${carFor(m.name).make} ${carFor(m.name).model}` : "none",
+      carNotes: carFor(m.name)?.notes || "",
+      currentCosts: m.costs || {}, wantMonthly: m.wantMonthly || null,
+      dna: m.quiz?.dims || null, quizNotes: m.quiz?.customs || [],
+    }));
+    const sys =
+      "You are the budget engine of a family Car OS. For each member, estimate any " +
+      "MISSING monthly cost fields (payment, insurance, fuel, upkeep) from their car, " +
+      "age, insurance tier, and commute — keep any values they already entered. Also " +
+      "suggest a realistic 'wantMonthly' (what they should budget for their next car) " +
+      "informed by their Driver DNA and quiz notes. Return ONLY a raw JSON array: " +
+      "[{\"id\":\"...\",\"costs\":{\"payment\":n,\"insurance\":n,\"fuel\":n,\"upkeep\":n}," +
+      "\"wantMonthly\":n,\"note\":\"one short reason\"}]. Numbers only, no prose outside JSON.";
+    try {
+      const raw = await callClaude([{ role: "user", content: JSON.stringify(payload) }], sys);
+      const clean = raw.replace(/```json|```/g, "").trim();
+      const arr = JSON.parse(clean.slice(clean.indexOf("[")));
+      const notes = [];
+      arr.forEach((u) => {
+        const m = family.members.find((x) => x.id === u.id);
+        if (!m) return;
+        updateMember(u.id, {
+          costs: { ...(m.costs || {}), ...u.costs },
+          wantMonthly: u.wantMonthly ?? m.wantMonthly,
+        });
+        if (u.note) notes.push(`${m.name}: ${u.note}`);
+      });
+      setAiNote(notes.join(" · "));
+    } catch (e) {
+      setErr("AI estimate failed: " + e.message);
+    }
+    setBusy(false);
+  };
 
   return (
     <>
       <Eyebrow>Money</Eyebrow>
-      <h2 style={{ fontFamily: T.display, fontSize: 36, fontWeight: 400, margin: "0 0 6px" }}>Budget Lab</h2>
-      <p style={{ color: T.dim, marginBottom: 22 }}>
-        Full cost of ownership — financing, insurance, and running costs. Pooled and personal.
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end",
+        flexWrap: "wrap", gap: 12 }}>
+        <div>
+          <h2 style={{ fontFamily: T.display, fontSize: 36, fontWeight: 400, margin: "0 0 6px" }}>
+            Family Budget</h2>
+        </div>
+        <button onClick={aiEstimate} disabled={busy} style={{ ...primaryBtn, opacity: busy ? .6 : 1 }}>
+          {busy ? "Estimating…" : "AI: fill & suggest"}</button>
+      </div>
+      <p style={{ color: T.dim, marginBottom: 20 }}>
+        Each person's real running costs, their car beside them, and what they want to spend next.
+        The AI fills blanks and suggests targets from the quiz and chats.
       </p>
 
+      {err && <Card style={{ borderColor: T.redline, marginBottom: 14 }}>
+        <div style={{ color: T.redline, fontSize: 13.5 }}>{err}</div></Card>}
+      {aiNote && <Card style={{ borderColor: T.cool, marginBottom: 14 }}>
+        <Eyebrow>What the AI changed</Eyebrow>
+        <div style={{ fontSize: 13.5, lineHeight: 1.5 }}>{aiNote}</div></Card>}
+
+      {/* per-person rows */}
+      <div style={{ display: "grid", gap: 12, marginBottom: 20 }}>
+        {family.members.map((m) => {
+          const car = carFor(m.name);
+          const mo = memberMonthly(m);
+          return (
+            <Card key={m.id}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline",
+                marginBottom: 4 }}>
+                <span style={{ fontSize: 17, fontWeight: 600 }}>{m.name}</span>
+                <span style={{ fontFamily: T.mono, fontSize: 15, color: T.amber }}>
+                  ${mo}/mo</span>
+              </div>
+              <div style={{ color: T.dim, fontSize: 12.5, marginBottom: 12 }}>
+                {car ? `${car.year} ${car.make} ${car.model}` : "no car assigned"}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(110px,1fr))",
+                gap: 10 }}>
+                {["payment", "insurance", "fuel", "upkeep"].map((k) => (
+                  <div key={k}>
+                    <div style={{ fontSize: 11, color: T.dim, marginBottom: 4,
+                      textTransform: "capitalize", fontFamily: T.mono }}>{k}</div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                      <span style={{ color: T.dim, fontSize: 13 }}>$</span>
+                      <input type="number" value={(m.costs?.[k]) ?? ""}
+                        onChange={(e) => setCost(m.id, k, e.target.value)}
+                        placeholder="0"
+                        style={{ ...inputStyle, padding: "7px 8px", width: "100%" }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 8,
+                borderTop: `1px solid ${T.line}`, paddingTop: 10 }}>
+                <span style={{ fontSize: 12.5, color: T.dim }}>Wants to spend next:</span>
+                <span style={{ color: T.dim, fontSize: 13 }}>$</span>
+                <input type="number" value={m.wantMonthly ?? ""}
+                  onChange={(e) => updateMember(m.id, { wantMonthly: Number(e.target.value) || 0 })}
+                  placeholder="0"
+                  style={{ ...inputStyle, padding: "7px 8px", width: 90 }} />
+                <span style={{ fontSize: 12.5, color: T.dim }}>/mo</span>
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+
+      {/* family totals */}
       <div className="grid-2">
         <Card>
-          <Eyebrow>One car — cost to own</Eyebrow>
-          <Field label="Price" value={price} set={setPrice} suffix="$" step={500} />
-          <Field label="Down payment" value={down} set={setDown} suffix="$" step={250} />
-          <Field label="APR" value={apr} set={setApr} suffix="%" step={0.1} />
-          <Field label="Term (months)" value={term} set={setTerm} suffix="mo" step={6} />
-          <Field label="Insurance / mo" value={insurance} set={setInsurance} suffix="$" step={10} />
-          <Field label="Fuel-charge / mo" value={fuel} set={setFuel} suffix="$" step={5} />
-          <Field label="Maintenance / mo" value={maint} set={setMaint} suffix="$" step={5} />
+          <Eyebrow>Right now</Eyebrow>
+          <BigStat label="Total running cost" value={`$${spend}/mo`} accent />
+          <Stat label="Combined budget" value={`$${budget}/mo`} />
+          <div style={{ marginTop: 10, fontSize: 13.5,
+            color: spend <= budget ? T.green : T.redline }}>
+            {spend <= budget
+              ? `Under budget — $${budget - spend}/mo free.`
+              : `Over by $${spend - budget}/mo right now.`}
+          </div>
         </Card>
-
-        <div>
-          <Card style={{ marginBottom: 14 }}>
-            <Eyebrow>Monthly breakdown</Eyebrow>
-            <BigStat label="Loan payment" value={`$${loan.toFixed(0)}`} />
-            <Stat label="Insurance" value={`$${insurance}`} />
-            <Stat label="Fuel / charging" value={`$${fuel}`} />
-            <Stat label="Maintenance" value={`$${maint}`} />
-            <div style={{ borderTop: `1px solid ${T.line}`, marginTop: 10, paddingTop: 12 }}>
-              <BigStat label="All-in monthly" value={`$${total.toFixed(0)}`} accent />
-            </div>
-          </Card>
-
-          <Card>
-            <Eyebrow>Family budget check</Eyebrow>
-            <Stat label="Combined budget" value={`$${family.combinedBudgetMonthly}/mo`} />
-            <Stat label="Sum of personal" value={`$${personalSum}/mo`} />
-            <Stat label="This car" value={`$${total.toFixed(0)}/mo`} accent />
-            <div style={{ marginTop: 10, fontSize: 13.5,
-              color: total <= family.combinedBudgetMonthly ? T.green : T.redline }}>
-              {total <= family.combinedBudgetMonthly
-                ? `Fits — $${(family.combinedBudgetMonthly - total).toFixed(0)}/mo headroom.`
-                : `Over by $${(total - family.combinedBudgetMonthly).toFixed(0)}/mo.`}
-            </div>
-          </Card>
-        </div>
+        <Card>
+          <Eyebrow>What everyone wants next</Eyebrow>
+          <BigStat label="Combined target" value={`$${want}/mo`} accent />
+          <Stat label="Combined budget" value={`$${budget}/mo`} />
+          <div style={{ marginTop: 10, fontSize: 13.5,
+            color: want <= budget ? T.green : T.redline }}>
+            {want === 0 ? "No targets set yet — try AI: fill & suggest."
+              : want <= budget
+              ? `Fits the budget with $${budget - want}/mo to spare.`
+              : `Wishlist is $${want - budget}/mo over budget — the plan will flag trade-offs.`}
+          </div>
+        </Card>
       </div>
     </>
   );

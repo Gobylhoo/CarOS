@@ -113,3 +113,6 @@ create policy cars_all on cars
 
 -- If you created the tables before api_key existed, run:
 -- alter table families add column if not exists api_key text;
+-- Budget feature columns (run if upgrading an existing DB):
+alter table members add column if not exists costs jsonb default '{}';
+alter table members add column if not exists want_monthly int;
