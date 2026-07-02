@@ -127,7 +127,7 @@ const SEED = {
    The app sends the active family code via a request header
    (x-family-code) so policies can restrict rows to that family.
    ============================================================ */
-const USE_SUPABASE = false; // ← flip to true in your repo once env + tables are set
+const USE_SUPABASE = true; // ← flip to true in your repo once env + tables are set
 
 /* Env bridge: the artifact runtime can't parse import.meta, so this file
    reads keys from globalThis.CAROS_ENV instead. In the Vite project,
