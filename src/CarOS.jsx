@@ -1694,7 +1694,9 @@ function Budget() {
 
   const setCost = (id, key, val) => {
     const m = family.members.find((x) => x.id === id);
-    updateMember(id, { costs: { ...(m.costs || {}), [key]: Number(val) || 0 } });
+    // Keep empty as undefined (not 0) so the field can truly clear; strip leading zeros.
+    const clean = val === "" ? undefined : Number(String(val).replace(/^0+(?=\d)/, ""));
+    updateMember(id, { costs: { ...(m.costs || {}), [key]: clean } });
   };
 
   // AI fills any blank cost fields (and can adjust want-to-spend) from car + profile.
@@ -1798,7 +1800,7 @@ function Budget() {
                 <span style={{ fontSize: 12.5, color: T.dim }}>Wants to spend next:</span>
                 <span style={{ color: T.dim, fontSize: 13 }}>$</span>
                 <input type="number" value={m.wantMonthly || ""}
-                  onChange={(e) => updateMember(m.id, { wantMonthly: Number(e.target.value) || 0 })}
+                  onChange={(e) => updateMember(m.id, { wantMonthly: e.target.value === "" ? undefined : Number(String(e.target.value).replace(/^0+(?=\d)/, "")) })}
                   onFocus={(e) => e.target.select()}
                   placeholder="0"
                   style={{ ...inputStyle, padding: "7px 8px", width: 90 }} />
