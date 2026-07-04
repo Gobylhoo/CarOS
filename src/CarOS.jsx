@@ -1402,7 +1402,7 @@ function Member({ go, id }) {
             <div>
               <div style={{ fontWeight: 600, fontSize: 14.5 }}>Take the Driver DNA quiz</div>
               <div style={{ color: T.dim, fontSize: 12.5, marginTop: 3 }}>
-                10 quick questions. Your matches generate the moment you finish.
+                {QUIZ.length} quick questions. Your matches generate the moment you finish.
               </div>
             </div>
             <button onClick={() => setQuizOpen(true)} style={{ ...primaryBtn, whiteSpace: "nowrap" }}>
