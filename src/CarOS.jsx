@@ -232,7 +232,17 @@ function useStore() {
   const [family, setFamily] = useState(null); // null until a family is loaded/created
   const [loading, setLoading] = useState(false);
 
-  // persist on every change (debounced-ish: fire and forget)
+  // Functional persist: always merge onto the LATEST state (prev), never a
+  // stale closure copy. This prevents concurrent writes (e.g. quiz save +
+  // auto-matcher) from overwriting each other. Save the computed next to DB.
+  const mutate = (fn) => {
+    setFamily((prev) => {
+      if (!prev) return prev;
+      const next = fn(prev);
+      backend.saveFamily(next);
+      return next;
+    });
+  };
   const persist = (next) => { setFamily(next); backend.saveFamily(next); };
 
   const api = {
@@ -253,26 +263,26 @@ function useStore() {
       return f;
     },
     seedDemo() { setActiveCode(SEED.code); setFamilyKey(""); persist(SEED); },
-    setApiKey(k) { setFamilyKey(k); persist({ ...family, apiKey: (k || "").trim() }); },
+    setApiKey(k) { setFamilyKey(k); mutate((f) => ({ ...f, apiKey: (k || "").trim() })); },
     clear() { setFamily(null); },
     updateMember(id, patch) {
-      persist({ ...family, members: family.members.map((m) =>
-        m.id === id ? { ...m, ...patch } : m) });
+      mutate((f) => ({ ...f, members: f.members.map((m) =>
+        m.id === id ? { ...m, ...patch } : m) }));
     },
     appendChat(id, msg) {
-      persist({ ...family, members: family.members.map((m) =>
-        m.id === id ? { ...m, chat: [...m.chat, msg] } : m) });
+      mutate((f) => ({ ...f, members: f.members.map((m) =>
+        m.id === id ? { ...m, chat: [...m.chat, msg] } : m) }));
     },
-    setPlan(plan) { persist({ ...family, plan }); },
-    addMember(member) { persist({ ...family, members: [...family.members, member] }); },
-    removeMember(id) { persist({ ...family, members: family.members.filter((m) => m.id !== id) }); },
-    addCar(car) { persist({ ...family, cars: [...family.cars, car] }); },
+    setPlan(plan) { mutate((f) => ({ ...f, plan })); },
+    addMember(member) { mutate((f) => ({ ...f, members: [...f.members, member] })); },
+    removeMember(id) { mutate((f) => ({ ...f, members: f.members.filter((m) => m.id !== id) })); },
+    addCar(car) { mutate((f) => ({ ...f, cars: [...f.cars, car] })); },
     updateCar(id, patch) {
-      persist({ ...family, cars: family.cars.map((c) =>
-        c.id === id ? { ...c, ...patch } : c) });
+      mutate((f) => ({ ...f, cars: f.cars.map((c) =>
+        c.id === id ? { ...c, ...patch } : c) }));
     },
-    removeCar(id) { persist({ ...family, cars: family.cars.filter((c) => c.id !== id) }); },
-    setCombinedBudget(v) { persist({ ...family, combinedBudgetMonthly: v }); },
+    removeCar(id) { mutate((f) => ({ ...f, cars: f.cars.filter((c) => c.id !== id) })); },
+    setCombinedBudget(v) { mutate((f) => ({ ...f, combinedBudgetMonthly: v })); },
   };
   return api;
 }
@@ -1267,13 +1277,15 @@ function Member({ go, id }) {
       .map(([i, v]) => `Q${+i + 1} "${QUIZ[i].q}" → ${v.custom}`);
     updateMember(id, { quiz: { answers, dims, customs, at: new Date().toISOString() } });
     setQuizOpen(false);
-    // Auto-run the matcher with fresh DNA
-    setTimeout(() => getMatchesWith(dims), 50);
+    // Auto-run the matcher with fresh DNA. Longer delay so the quiz write
+    // settles first, and the matcher merges onto the latest member (not a
+    // stale copy) so it can't overwrite the just-saved quiz.
+    setTimeout(() => getMatchesWith(dims, customs), 400);
   };
 
-  const getMatches = () => getMatchesWith(m.quiz?.dims);
+  const getMatches = () => getMatchesWith(m.quiz?.dims, m.quiz?.customs);
 
-  const getMatchesWith = async (dims) => {
+  const getMatchesWith = async (dims, customs) => {
     if (matching) return;
     setMatching(true); setMatchErr("");
     const sysMatch =
@@ -1289,6 +1301,7 @@ function Member({ go, id }) {
       "HONESTY: never inflate fit scores. If their wants don't match their budget or " +
       "insurance reality, let the scores be honestly low and say why in the why field. " +
       "If their current car already covers their needs, the top why should say so.";
+    const useCustoms = customs || m.quiz?.customs;
     const profile =
       `Driver: ${m.name}, age ${m.age}, ${m.role}. ` +
       `Priorities: ${m.priorities.join(", ")}. Prefers to ${m.leaseVsBuy}. ` +
@@ -1297,8 +1310,8 @@ function Member({ go, id }) {
       (dims ? `Driver DNA from their quiz (0-100 per dimension, higher = matters more): ` +
         `${Object.entries(dims).map(([k, v]) => `${k} ${v}`).join(", ")}. ` +
         `Weight the top dimensions heavily. ` : "") +
-      (m.quiz?.customs?.length ? `Their own words on the quiz — weight these heavily: ` +
-        `${m.quiz.customs.join("; ")}. ` : "") +
+      (useCustoms?.length ? `Their own words on the quiz — weight these heavily: ` +
+        `${useCustoms.join("; ")}. ` : "") +
       `Recent conversation excerpts: ${m.chat.slice(-6).map((c) => c.content).join(" | ") || "none"}`;
     try {
       const raw = await callClaude([{ role: "user", content: profile }], sysMatch);
